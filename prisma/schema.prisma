@@ -1,0 +1,196 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  passwordHash String
+  name         String
+  phone        String?
+  role         String       @default("CUSTOMER") // "CUSTOMER" | "DELIVERY_AGENT" | "ADMIN"
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  customerProfile CustomerProfile?
+  agentProfile    AgentProfile?
+  ordersCreated   Order[]          @relation("CustomerOrders")
+  trackingEvents  TrackingEvent[]
+  notifications   Notification[]
+}
+
+model CustomerProfile {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyName String?
+  gstin       String?
+  city        String?
+  createdAt   DateTime @default(now())
+}
+
+model AgentProfile {
+  id              String           @id @default(cuid())
+  userId          String           @unique
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vehicleType     String           @default("Bike") // Bike, Scooter, Electric Van, Mini Truck
+  vehicleNumber   String           @default("KA-01-EA-1001")
+  currentZoneId   String?
+  currentZone     Zone?            @relation(fields: [currentZoneId], references: [id])
+  status          String           @default("AVAILABLE") // "AVAILABLE" | "BUSY" | "OFFLINE"
+  activeDeliveries Int             @default(0)
+  rating          Float            @default(4.8)
+  createdAt       DateTime         @default(now())
+  assignments     DeliveryAssignment[]
+}
+
+model Zone {
+  id          String         @id @default(cuid())
+  code        String         @unique // BLR_SOUTH, BLR_EAST, BLR_NORTH, BLR_CENTRAL, etc.
+  name        String
+  city        String         @default("Bengaluru")
+  state       String         @default("Karnataka")
+  active      Boolean        @default(true)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  areas       ZoneArea[]
+  agents      AgentProfile[]
+  pickupOrders Order[]       @relation("PickupZone")
+  dropOrders   Order[]       @relation("DropZone")
+}
+
+model ZoneArea {
+  id        String   @id @default(cuid())
+  zoneId    String
+  zone      Zone     @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+  areaName  String   // e.g. "Koramangala", "Indiranagar", "Whitefield", "HSR Layout"
+  pincode   String   // e.g. "560034"
+  createdAt DateTime @default(now())
+
+  @@unique([zoneId, pincode, areaName])
+}
+
+model RateCard {
+  id                  String   @id @default(cuid())
+  name                String   // e.g. "Standard B2C Rate Card", "Enterprise B2B Rate Card"
+  orderType           String   // "B2B" | "B2C"
+  intraZoneBaseRate   Float    // Base price in INR (covers up to baseWeightKg)
+  intraZoneExtraPerKg Float    // Price in INR per additional kg
+  interZoneBaseRate   Float    // Base price in INR (covers up to baseWeightKg)
+  interZoneExtraPerKg Float    // Price in INR per additional kg
+  baseWeightKg        Float    @default(1.0) // Included base weight in kg
+  codSurcharge        Float    @default(40.0) // Flat INR surcharge for COD
+  active              Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+model Order {
+  id                 String       @id @default(cuid())
+  trackingNumber     String       @unique // e.g. "TRK-IN-2026-98765"
+  customerId         String
+  customer           User         @relation("CustomerOrders", fields: [customerId], references: [id])
+  orderType          String       @default("B2C") // "B2B" | "B2C"
+  paymentType        String       @default("PREPAID") // "PREPAID" | "COD"
+  status             String       @default("CREATED") // "CREATED" | "PICKED_UP" | "IN_TRANSIT" | "OUT_FOR_DELIVERY" | "DELIVERED" | "FAILED"
+
+  pickupAddress      String
+  pickupPincode      String
+  pickupArea         String?
+  pickupCity         String       @default("Bengaluru")
+  pickupZoneId       String
+  pickupZone         Zone         @relation("PickupZone", fields: [pickupZoneId], references: [id])
+
+  dropAddress        String
+  dropPincode        String
+  dropArea           String?
+  dropCity           String       @default("Bengaluru")
+  dropZoneId         String
+  dropZone           Zone         @relation("DropZone", fields: [dropZoneId], references: [id])
+
+  lengthCm           Float
+  breadthCm          Float
+  heightCm           Float
+  actualWeightKg     Float
+  volumetricWeightKg Float
+  chargeableWeightKg Float
+
+  zoneType           String       // "INTRA" | "INTER"
+  baseCharge         Float        // Base rate in INR
+  weightCharge       Float        // Additional weight charge in INR
+  codSurcharge       Float        // COD surcharge in INR
+  totalAmount        Float        // Final billed price in INR
+
+  assignedAgentId    String?
+  assignedAgentName  String?
+  assignedAgentPhone String?
+
+  rescheduledDate    DateTime?
+  rescheduleReason   String?
+  rescheduleSlot     String?
+  failureReason      String?
+  failureNotes       String?
+
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  assignments        DeliveryAssignment[]
+  attempts           DeliveryAttempt[]
+  trackingEvents     TrackingEvent[]
+}
+
+model DeliveryAssignment {
+  id         String       @id @default(cuid())
+  orderId    String
+  order      Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  agentId    String
+  agent      AgentProfile @relation(fields: [agentId], references: [id])
+  assignedAt DateTime     @default(now())
+  active     Boolean      @default(true)
+  reason     String?      // e.g. "Auto-assigned: Best zone match & lowest workload"
+}
+
+model DeliveryAttempt {
+  id            String    @id @default(cuid())
+  orderId       String
+  order         Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  attemptNumber Int       @default(1)
+  status        String    @default("OUT_FOR_DELIVERY")
+  failureReason String?
+  notes         String?
+  attemptedAt   DateTime  @default(now())
+}
+
+model TrackingEvent {
+  id             String    @id @default(cuid())
+  orderId        String
+  order          Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  previousStatus String?
+  newStatus      String
+  timestamp      DateTime  @default(now())
+  actorId        String?
+  actor          User?     @relation(fields: [actorId], references: [id])
+  actorRole      String    // "CUSTOMER" | "DELIVERY_AGENT" | "ADMIN" | "SYSTEM"
+  location       String?
+  notes          String?
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderId   String?
+  title     String
+  message   String
+  type      String   // "ORDER_CREATED" | "AGENT_ASSIGNED" | "STATUS_UPDATE" | "DELIVERY_FAILED" | "DELIVERY_RESCHEDULED"
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
